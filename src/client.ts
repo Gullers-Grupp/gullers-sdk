@@ -218,15 +218,240 @@ class QueryBuilder<T = any> {
   }
 }
 
+// ── Auth types ──────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: string;
+  email?: string;
+  [key: string]: any;
+}
+
+export interface AuthSession {
+  access_token: string;
+  user: AuthUser;
+  [key: string]: any;
+}
+
+type AuthChangeEvent = 'SIGNED_IN' | 'SIGNED_OUT' | 'TOKEN_REFRESHED';
+type AuthChangeCallback = (event: AuthChangeEvent, session: AuthSession | null) => void;
+
+class AuthClient {
+  private _client: GullersClient;
+  private _session: AuthSession | null = null;
+  private _listeners: Set<AuthChangeCallback> = new Set();
+
+  constructor(client: GullersClient) {
+    this._client = client;
+  }
+
+  private _notify(event: AuthChangeEvent, session: AuthSession | null) {
+    this._session = session;
+    this._listeners.forEach((cb) => cb(event, session));
+  }
+
+  async signInWithPassword(creds: { email: string; password: string }): Promise<{ data: { session: AuthSession | null; user: AuthUser | null }; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      headers['Content-Type'] = 'application/json';
+      const res = await fetch(`${this._client.baseUrl}/api/auth/sign-in`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(creds),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return { data: { session: null, user: null }, error: { message: err.error ?? res.statusText } };
+      }
+      const data = await res.json();
+      this._notify('SIGNED_IN', data.session);
+      return { data: { session: data.session, user: data.session?.user ?? null }, error: null };
+    } catch (e: any) {
+      return { data: { session: null, user: null }, error: { message: e.message } };
+    }
+  }
+
+  async signOut(opts?: { scope?: string }): Promise<{ error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      await fetch(`${this._client.baseUrl}/api/auth/sign-out`, {
+        method: 'POST',
+        headers,
+      }).catch(() => {});
+      this._notify('SIGNED_OUT', null);
+      return { error: null };
+    } catch (e: any) {
+      this._notify('SIGNED_OUT', null);
+      return { error: { message: e.message } };
+    }
+  }
+
+  async getSession(): Promise<{ data: { session: AuthSession | null }; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      const res = await fetch(`${this._client.baseUrl}/api/auth/session`, {
+        headers,
+      });
+      if (!res.ok) {
+        return { data: { session: null }, error: null };
+      }
+      const data = await res.json();
+      this._session = data.session ?? null;
+      return { data: { session: this._session }, error: null };
+    } catch (e: any) {
+      return { data: { session: null }, error: { message: e.message } };
+    }
+  }
+
+  async getUser(): Promise<{ data: { user: AuthUser | null }; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      const res = await fetch(`${this._client.baseUrl}/api/auth/user`, {
+        headers,
+      });
+      if (!res.ok) {
+        return { data: { user: null }, error: null };
+      }
+      const data = await res.json();
+      return { data: { user: data.user ?? null }, error: null };
+    } catch (e: any) {
+      return { data: { user: null }, error: { message: e.message } };
+    }
+  }
+
+  onAuthStateChange(callback: AuthChangeCallback): { data: { subscription: { unsubscribe: () => void } } } {
+    this._listeners.add(callback);
+    // Fire immediately with current state
+    if (this._session) callback('SIGNED_IN', this._session);
+    return {
+      data: {
+        subscription: {
+          unsubscribe: () => { this._listeners.delete(callback); },
+        },
+      },
+    };
+  }
+}
+
+// ── Storage types ───────────────────────────────────────────────────────
+
+class StorageBucketClient {
+  private _bucket: string;
+  private _client: GullersClient;
+
+  constructor(bucket: string, client: GullersClient) {
+    this._bucket = bucket;
+    this._client = client;
+  }
+
+  async upload(path: string, file: File | Blob | ArrayBuffer): Promise<{ data: { path: string } | null; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      const formData = new FormData();
+      formData.append('file', file instanceof ArrayBuffer ? new Blob([file]) : file);
+      formData.append('path', path);
+      const res = await fetch(`${this._client.baseUrl}/api/storage/${this._bucket}/upload`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return { data: null, error: { message: err.error ?? res.statusText } };
+      }
+      const data = await res.json();
+      return { data: { path: data.path ?? path }, error: null };
+    } catch (e: any) {
+      return { data: null, error: { message: e.message } };
+    }
+  }
+
+  async download(path: string): Promise<{ data: Blob | null; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      const res = await fetch(
+        `${this._client.baseUrl}/api/storage/${this._bucket}/download?path=${encodeURIComponent(path)}`,
+        { headers },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return { data: null, error: { message: err.error ?? res.statusText } };
+      }
+      return { data: await res.blob(), error: null };
+    } catch (e: any) {
+      return { data: null, error: { message: e.message } };
+    }
+  }
+
+  async remove(paths: string[]): Promise<{ data: any; error: any }> {
+    try {
+      const headers = await this._client.getHeaders();
+      headers['Content-Type'] = 'application/json';
+      const res = await fetch(`${this._client.baseUrl}/api/storage/${this._bucket}/remove`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ paths }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return { data: null, error: { message: err.error ?? res.statusText } };
+      }
+      return { data: await res.json(), error: null };
+    } catch (e: any) {
+      return { data: null, error: { message: e.message } };
+    }
+  }
+}
+
+class StorageClient {
+  private _client: GullersClient;
+
+  constructor(client: GullersClient) {
+    this._client = client;
+  }
+
+  from(bucket: string): StorageBucketClient {
+    return new StorageBucketClient(bucket, this._client);
+  }
+}
+
+// ── Realtime (stub — subscribe returns noop so code doesn't break) ──────
+
+class RealtimeChannel {
+  private _name: string;
+
+  constructor(name: string) {
+    this._name = name;
+  }
+
+  on(_event: string, _filter: any, callback?: Function): this {
+    // Realtime not yet implemented — silently ignore subscriptions
+    return this;
+  }
+
+  subscribe(callback?: (status: string) => void): this {
+    callback?.('SUBSCRIBED');
+    return this;
+  }
+
+  unsubscribe(): void {}
+}
+
+// ── Main client ─────────────────────────────────────────────────────────
+
 export class GullersClient {
   readonly baseUrl: string;
   private _apiKey?: string;
   private _tokenProvider?: AuthProvider;
+  private _auth: AuthClient;
+  private _storage: StorageClient;
+  private _channels: Map<string, RealtimeChannel> = new Map();
 
   constructor(opts: GullersClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this._apiKey = opts.apiKey;
     this._tokenProvider = opts.tokenProvider;
+    this._auth = new AuthClient(this);
+    this._storage = new StorageClient(this);
   }
 
   /** Build auth headers. API key takes precedence; falls back to token provider. */
@@ -270,6 +495,25 @@ export class GullersClient {
         return this.rpc<T>(fn, opts?.body);
       },
     };
+  }
+
+  get auth(): AuthClient {
+    return this._auth;
+  }
+
+  get storage(): StorageClient {
+    return this._storage;
+  }
+
+  /** Create a realtime channel (stub — subscriptions are silently ignored). */
+  channel(name: string): RealtimeChannel {
+    const ch = new RealtimeChannel(name);
+    this._channels.set(name, ch);
+    return ch;
+  }
+
+  removeChannel(channel: RealtimeChannel): void {
+    channel.unsubscribe();
   }
 }
 

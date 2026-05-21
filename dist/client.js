@@ -158,14 +158,203 @@ class QueryBuilder {
         return this.execute().then(resolve, reject);
     }
 }
+class AuthClient {
+    _client;
+    _session = null;
+    _listeners = new Set();
+    constructor(client) {
+        this._client = client;
+    }
+    _notify(event, session) {
+        this._session = session;
+        this._listeners.forEach((cb) => cb(event, session));
+    }
+    async signInWithPassword(creds) {
+        try {
+            const headers = await this._client.getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const res = await fetch(`${this._client.baseUrl}/api/auth/sign-in`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(creds),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: res.statusText }));
+                return { data: { session: null, user: null }, error: { message: err.error ?? res.statusText } };
+            }
+            const data = await res.json();
+            this._notify('SIGNED_IN', data.session);
+            return { data: { session: data.session, user: data.session?.user ?? null }, error: null };
+        }
+        catch (e) {
+            return { data: { session: null, user: null }, error: { message: e.message } };
+        }
+    }
+    async signOut(opts) {
+        try {
+            const headers = await this._client.getHeaders();
+            await fetch(`${this._client.baseUrl}/api/auth/sign-out`, {
+                method: 'POST',
+                headers,
+            }).catch(() => { });
+            this._notify('SIGNED_OUT', null);
+            return { error: null };
+        }
+        catch (e) {
+            this._notify('SIGNED_OUT', null);
+            return { error: { message: e.message } };
+        }
+    }
+    async getSession() {
+        try {
+            const headers = await this._client.getHeaders();
+            const res = await fetch(`${this._client.baseUrl}/api/auth/session`, {
+                headers,
+            });
+            if (!res.ok) {
+                return { data: { session: null }, error: null };
+            }
+            const data = await res.json();
+            this._session = data.session ?? null;
+            return { data: { session: this._session }, error: null };
+        }
+        catch (e) {
+            return { data: { session: null }, error: { message: e.message } };
+        }
+    }
+    async getUser() {
+        try {
+            const headers = await this._client.getHeaders();
+            const res = await fetch(`${this._client.baseUrl}/api/auth/user`, {
+                headers,
+            });
+            if (!res.ok) {
+                return { data: { user: null }, error: null };
+            }
+            const data = await res.json();
+            return { data: { user: data.user ?? null }, error: null };
+        }
+        catch (e) {
+            return { data: { user: null }, error: { message: e.message } };
+        }
+    }
+    onAuthStateChange(callback) {
+        this._listeners.add(callback);
+        // Fire immediately with current state
+        if (this._session)
+            callback('SIGNED_IN', this._session);
+        return {
+            data: {
+                subscription: {
+                    unsubscribe: () => { this._listeners.delete(callback); },
+                },
+            },
+        };
+    }
+}
+// ── Storage types ───────────────────────────────────────────────────────
+class StorageBucketClient {
+    _bucket;
+    _client;
+    constructor(bucket, client) {
+        this._bucket = bucket;
+        this._client = client;
+    }
+    async upload(path, file) {
+        try {
+            const headers = await this._client.getHeaders();
+            const formData = new FormData();
+            formData.append('file', file instanceof ArrayBuffer ? new Blob([file]) : file);
+            formData.append('path', path);
+            const res = await fetch(`${this._client.baseUrl}/api/storage/${this._bucket}/upload`, {
+                method: 'POST',
+                headers,
+                body: formData,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: res.statusText }));
+                return { data: null, error: { message: err.error ?? res.statusText } };
+            }
+            const data = await res.json();
+            return { data: { path: data.path ?? path }, error: null };
+        }
+        catch (e) {
+            return { data: null, error: { message: e.message } };
+        }
+    }
+    async download(path) {
+        try {
+            const headers = await this._client.getHeaders();
+            const res = await fetch(`${this._client.baseUrl}/api/storage/${this._bucket}/download?path=${encodeURIComponent(path)}`, { headers });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: res.statusText }));
+                return { data: null, error: { message: err.error ?? res.statusText } };
+            }
+            return { data: await res.blob(), error: null };
+        }
+        catch (e) {
+            return { data: null, error: { message: e.message } };
+        }
+    }
+    async remove(paths) {
+        try {
+            const headers = await this._client.getHeaders();
+            headers['Content-Type'] = 'application/json';
+            const res = await fetch(`${this._client.baseUrl}/api/storage/${this._bucket}/remove`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ paths }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: res.statusText }));
+                return { data: null, error: { message: err.error ?? res.statusText } };
+            }
+            return { data: await res.json(), error: null };
+        }
+        catch (e) {
+            return { data: null, error: { message: e.message } };
+        }
+    }
+}
+class StorageClient {
+    _client;
+    constructor(client) {
+        this._client = client;
+    }
+    from(bucket) {
+        return new StorageBucketClient(bucket, this._client);
+    }
+}
+// ── Realtime (stub — subscribe returns noop so code doesn't break) ──────
+class RealtimeChannel {
+    _name;
+    constructor(name) {
+        this._name = name;
+    }
+    on(_event, _filter, callback) {
+        // Realtime not yet implemented — silently ignore subscriptions
+        return this;
+    }
+    subscribe(callback) {
+        callback?.('SUBSCRIBED');
+        return this;
+    }
+    unsubscribe() { }
+}
+// ── Main client ─────────────────────────────────────────────────────────
 export class GullersClient {
     baseUrl;
     _apiKey;
     _tokenProvider;
+    _auth;
+    _storage;
+    _channels = new Map();
     constructor(opts) {
         this.baseUrl = opts.baseUrl.replace(/\/$/, '');
         this._apiKey = opts.apiKey;
         this._tokenProvider = opts.tokenProvider;
+        this._auth = new AuthClient(this);
+        this._storage = new StorageClient(this);
     }
     /** Build auth headers. API key takes precedence; falls back to token provider. */
     async getHeaders() {
@@ -208,6 +397,21 @@ export class GullersClient {
                 return this.rpc(fn, opts?.body);
             },
         };
+    }
+    get auth() {
+        return this._auth;
+    }
+    get storage() {
+        return this._storage;
+    }
+    /** Create a realtime channel (stub — subscriptions are silently ignored). */
+    channel(name) {
+        const ch = new RealtimeChannel(name);
+        this._channels.set(name, ch);
+        return ch;
+    }
+    removeChannel(channel) {
+        channel.unsubscribe();
     }
 }
 export function createClient(opts) {

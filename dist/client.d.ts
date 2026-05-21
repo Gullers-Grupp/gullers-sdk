@@ -68,10 +68,97 @@ declare class QueryBuilder<T = any> {
     execute(): Promise<QueryResult<T>>;
     then<R>(resolve: (value: QueryResult<T>) => R, reject?: (reason: any) => R): Promise<R>;
 }
+export interface AuthUser {
+    id: string;
+    email?: string;
+    [key: string]: any;
+}
+export interface AuthSession {
+    access_token: string;
+    user: AuthUser;
+    [key: string]: any;
+}
+type AuthChangeEvent = 'SIGNED_IN' | 'SIGNED_OUT' | 'TOKEN_REFRESHED';
+type AuthChangeCallback = (event: AuthChangeEvent, session: AuthSession | null) => void;
+declare class AuthClient {
+    private _client;
+    private _session;
+    private _listeners;
+    constructor(client: GullersClient);
+    private _notify;
+    signInWithPassword(creds: {
+        email: string;
+        password: string;
+    }): Promise<{
+        data: {
+            session: AuthSession | null;
+            user: AuthUser | null;
+        };
+        error: any;
+    }>;
+    signOut(opts?: {
+        scope?: string;
+    }): Promise<{
+        error: any;
+    }>;
+    getSession(): Promise<{
+        data: {
+            session: AuthSession | null;
+        };
+        error: any;
+    }>;
+    getUser(): Promise<{
+        data: {
+            user: AuthUser | null;
+        };
+        error: any;
+    }>;
+    onAuthStateChange(callback: AuthChangeCallback): {
+        data: {
+            subscription: {
+                unsubscribe: () => void;
+            };
+        };
+    };
+}
+declare class StorageBucketClient {
+    private _bucket;
+    private _client;
+    constructor(bucket: string, client: GullersClient);
+    upload(path: string, file: File | Blob | ArrayBuffer): Promise<{
+        data: {
+            path: string;
+        } | null;
+        error: any;
+    }>;
+    download(path: string): Promise<{
+        data: Blob | null;
+        error: any;
+    }>;
+    remove(paths: string[]): Promise<{
+        data: any;
+        error: any;
+    }>;
+}
+declare class StorageClient {
+    private _client;
+    constructor(client: GullersClient);
+    from(bucket: string): StorageBucketClient;
+}
+declare class RealtimeChannel {
+    private _name;
+    constructor(name: string);
+    on(_event: string, _filter: any, callback?: Function): this;
+    subscribe(callback?: (status: string) => void): this;
+    unsubscribe(): void;
+}
 export declare class GullersClient {
     readonly baseUrl: string;
     private _apiKey?;
     private _tokenProvider?;
+    private _auth;
+    private _storage;
+    private _channels;
     constructor(opts: GullersClientOptions);
     /** Build auth headers. API key takes precedence; falls back to token provider. */
     getHeaders(): Promise<Record<string, string>>;
@@ -82,6 +169,11 @@ export declare class GullersClient {
             body?: any;
         }) => Promise<QueryResult<T>>;
     };
+    get auth(): AuthClient;
+    get storage(): StorageClient;
+    /** Create a realtime channel (stub — subscriptions are silently ignored). */
+    channel(name: string): RealtimeChannel;
+    removeChannel(channel: RealtimeChannel): void;
 }
 export declare function createClient(opts: GullersClientOptions): GullersClient;
 export {};
