@@ -30,6 +30,8 @@ export interface GullersClientOptions {
     apiKey?: string;
     /** Dynamic token provider for public apps (e.g. Firebase getIdToken). */
     tokenProvider?: AuthProvider;
+    /** App identifier — used for per-user access control on external apps. */
+    appId?: string;
 }
 declare class QueryBuilder<T = any> {
     private _table;
@@ -156,6 +158,7 @@ export declare class GullersClient {
     readonly baseUrl: string;
     private _apiKey?;
     private _tokenProvider?;
+    private _appId?;
     private _auth;
     private _storage;
     private _channels;

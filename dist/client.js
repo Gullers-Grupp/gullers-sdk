@@ -346,6 +346,7 @@ export class GullersClient {
     baseUrl;
     _apiKey;
     _tokenProvider;
+    _appId;
     _auth;
     _storage;
     _channels = new Map();
@@ -353,6 +354,7 @@ export class GullersClient {
         this.baseUrl = opts.baseUrl.replace(/\/$/, '');
         this._apiKey = opts.apiKey;
         this._tokenProvider = opts.tokenProvider;
+        this._appId = opts.appId;
         this._auth = new AuthClient(this);
         this._storage = new StorageClient(this);
     }
@@ -367,6 +369,8 @@ export class GullersClient {
             if (token)
                 headers['Authorization'] = `Bearer ${token}`;
         }
+        if (this._appId)
+            headers['X-App-Id'] = this._appId;
         return headers;
     }
     from(table) {

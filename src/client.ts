@@ -31,6 +31,8 @@ export interface GullersClientOptions {
   apiKey?: string;
   /** Dynamic token provider for public apps (e.g. Firebase getIdToken). */
   tokenProvider?: AuthProvider;
+  /** App identifier — used for per-user access control on external apps. */
+  appId?: string;
 }
 
 type FilterOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'is' | 'in';
@@ -442,6 +444,7 @@ export class GullersClient {
   readonly baseUrl: string;
   private _apiKey?: string;
   private _tokenProvider?: AuthProvider;
+  private _appId?: string;
   private _auth: AuthClient;
   private _storage: StorageClient;
   private _channels: Map<string, RealtimeChannel> = new Map();
@@ -450,6 +453,7 @@ export class GullersClient {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this._apiKey = opts.apiKey;
     this._tokenProvider = opts.tokenProvider;
+    this._appId = opts.appId;
     this._auth = new AuthClient(this);
     this._storage = new StorageClient(this);
   }
@@ -463,6 +467,7 @@ export class GullersClient {
       const token = await this._tokenProvider();
       if (token) headers['Authorization'] = `Bearer ${token}`;
     }
+    if (this._appId) headers['X-App-Id'] = this._appId;
     return headers;
   }
 
